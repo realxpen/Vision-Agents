@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sentinel Frontend Preview (React)</title>
+    <link rel="stylesheet" href="./sentinel_panel.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #02060d;
+        color: #d9ebff;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+      }
+      .preview-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .preview-actions button {
+        border: 1px solid #163253;
+        background: #0b1a33;
+        color: #d9ebff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      .preview-actions button:hover {
+        background: #112440;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sentinel-root"></div>
+    <script type="module" src="./preview-react.js"></script>
+  </body>
+</html>
