@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sentinel Frontend Preview (React)</title>
-    <link rel="stylesheet" href="./sentinel_panel.css" />
+    <link rel="stylesheet" href="./sentinel_panel.css?v=3" />
     <style>
       body {
         margin: 0;
@@ -13,10 +13,28 @@
         color: #d9ebff;
         font-family: "Segoe UI", Tahoma, sans-serif;
       }
+      .preview-config {
+        margin-bottom: 12px;
+        border: 1px solid #163253;
+        border-radius: 10px;
+        background: #061426;
+        padding: 12px;
+      }
+      .preview-config h3 {
+        margin: 0 0 10px 0;
+      }
+      .meta {
+        display: grid;
+        gap: 4px;
+        color: #a7c3e8;
+        font-size: 12px;
+      }
       .preview-actions {
         display: flex;
         gap: 8px;
         margin-bottom: 12px;
+        margin-top: 10px;
+        align-items: center;
       }
       .preview-actions button {
         border: 1px solid #163253;
@@ -29,10 +47,19 @@
       .preview-actions button:hover {
         background: #112440;
       }
+      .status {
+        font-size: 12px;
+        color: #a7c3e8;
+      }
+      .error {
+        margin-top: 8px;
+        color: #ff8080;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
     <div id="sentinel-root"></div>
-    <script type="module" src="./preview-react.js"></script>
+    <script type="module" src="./preview-react.js?v=3"></script>
   </body>
 </html>

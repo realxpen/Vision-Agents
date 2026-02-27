@@ -100,6 +100,21 @@
   overflow: hidden;
 }
 
+.camera-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  background: #000;
+}
+
+.camera-video.live {
+  opacity: 1;
+}
+
 .camera-overlay {
   position: absolute;
   inset: 0;
@@ -110,8 +125,47 @@
   color: #8ea8ca;
 }
 
+.camera-video.live + .camera-overlay {
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.45) 0%,
+    rgba(0, 0, 0, 0.1) 40%,
+    rgba(0, 0, 0, 0) 70%
+  );
+  place-content: end center;
+  padding-bottom: 48px;
+}
+
 .camera-icon {
   font-size: 34px;
+}
+
+.mic-meter {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  z-index: 3;
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: #c0d8f7;
+}
+
+.mic-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(8, 24, 44, 0.8);
+  border: 1px solid #1a365a;
+  overflow: hidden;
+}
+
+.mic-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #2fd38d 0%, #f5c14a 70%, #ff6f6f 100%);
+  transition: width 80ms linear;
 }
 
 .session-report {

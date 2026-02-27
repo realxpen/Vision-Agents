@@ -41,13 +41,36 @@ unmountSentinelPanel();
 - `incident_log` with `{ message: string }`
 - `warning` with `{ message: string }`
 
-## Quick Preview (React)
+## Quick Preview (React, Real Stream Call, Auto .env Config)
 
 Open this file in your browser:
 
 - `examples/10_sentinel_ai/frontend/preview.html`
 
-This preview now uses React (via ESM CDN) and includes simulation buttons for LOW / MEDIUM / HIGH events.
+This preview uses React (ESM CDN) and connects to a real Stream call.
+It fetches API key + user token from a local backend endpoint, so you do not type keys in the browser.
+
+### End-to-end steps
+
+1. Start the agent with a fixed call ID:
+
+```bash
+python examples/10_sentinel_ai/sentinel_ai.py run --no-demo --call-id sentinel-live
+```
+
+2. Run the frontend dev server:
+
+```bash
+cd examples/10_sentinel_ai/frontend
+python dev_server.py
+```
+
+3. Open:
+- `http://localhost:5500/preview.html`
+
+4. Click `Connect to Call`.
+
+The incident panel and risk status will now be driven by real agent custom events.
 
 ## Keep Agent Active (No Idle Timeout)
 

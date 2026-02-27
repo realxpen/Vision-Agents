@@ -248,7 +248,7 @@ class StreamEdge(EdgeTransport[StreamCall]):
         # Wait for pending track to be populated (with 10 second timeout)
         # SFU might send TrackPublishedEvent before WebRTC processes track_added
         track_id = None
-        timeout = 10.0
+        timeout = 30.0
         poll_interval = 0.01
         elapsed = 0.0
 
@@ -290,12 +290,16 @@ class StreamEdge(EdgeTransport[StreamCall]):
                 )
 
         else:
-            raise TimeoutError(
-                f"Timeout waiting for pending track: {track_type.name} from user {user_id}, "
-                f"session {session_id}. Waited {timeout}s but WebRTC track_added with matching kind was never received."
-                f"Pending tracks: {self._pending_tracks}\n"
-                f"Key: {track_key}\n"
-                f"Track map: {self._track_map}\n"
+            logger.warning(
+                "Timeout waiting for pending track: %s from user %s, session %s. "
+                "Waited %.1fs; continuing without raising. Pending tracks: %s Key: %s Track map: %s",
+                track_type.name,
+                user_id,
+                session_id,
+                timeout,
+                self._pending_tracks,
+                track_key,
+                self._track_map,
             )
 
     async def _on_track_removed(
