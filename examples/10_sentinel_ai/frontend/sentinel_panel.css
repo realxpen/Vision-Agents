@@ -53,6 +53,19 @@
   font-size: 12px;
 }
 
+.sdk-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid #234667;
+  background: #0b1c35;
+  color: #9ec2ed;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
 .top-actions {
   display: flex;
   align-items: center;
@@ -238,7 +251,57 @@
   padding-top: 180px;
 }
 
-#sentinel-incidents {
+.incident-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.incident-group {
+  border: 1px solid #1a3556;
+  border-radius: 10px;
+  background: #0b1f3c;
+  padding: 8px;
+}
+
+.incident-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.risk-pill {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  border: 1px solid transparent;
+}
+
+.risk-pill.high {
+  background: #351622;
+  color: #ffb6c9;
+  border-color: #6a2a44;
+}
+
+.risk-pill.medium {
+  background: #3b2c10;
+  color: #ffd68d;
+  border-color: #6f5425;
+}
+
+.risk-pill.low {
+  background: #123225;
+  color: #9ceccf;
+  border-color: #1f5f44;
+}
+
+.group-count {
+  font-size: 11px;
+  color: #94b2d7;
+}
+
+.incident-group-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -262,6 +325,18 @@
   margin-top: 6px;
   border-radius: 999px;
   background: var(--warn);
+}
+
+.incident-item.high .dot {
+  background: #ff6f6f;
+}
+
+.incident-item.medium .dot {
+  background: #ffc44f;
+}
+
+.incident-item.low .dot {
+  background: #78e6bd;
 }
 
 .incident-item strong {

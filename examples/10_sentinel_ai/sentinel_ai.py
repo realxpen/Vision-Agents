@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -10,9 +12,10 @@ from dotenv import load_dotenv
 from vision_agents.core import Agent, AgentLauncher, Runner, User
 from vision_agents.core.processors.base_processor import AudioProcessor, VideoProcessor
 from vision_agents.core.utils.video_forwarder import VideoForwarder
-from vision_agents.plugins import deepgram, getstream, openai, ultralytics
+from vision_agents.plugins import deepgram, getstream, openai
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 SENTINEL_INSTRUCTIONS = """
@@ -51,11 +54,20 @@ def _normalize_audio(samples: np.ndarray) -> np.ndarray:
 class LoudNoiseProcessor(AudioProcessor):
     name = "loud_noise"
 
-    def __init__(self, rms_threshold: float = 0.35, cooldown_seconds: float = 3.0):
-        self.rms_threshold = rms_threshold
+    def __init__(
+        self,
+        rms_low_threshold: float = 0.18,
+        rms_medium_threshold: float = 0.28,
+        rms_high_threshold: float = 0.45,
+        cooldown_seconds: float = 3.0,
+    ):
+        self.rms_low_threshold = rms_low_threshold
+        self.rms_medium_threshold = rms_medium_threshold
+        self.rms_high_threshold = rms_high_threshold
         self.cooldown_seconds = cooldown_seconds
         self._last_trigger = 0.0
         self._agent: Optional[Agent] = None
+        self._inflight_task: Optional[asyncio.Task] = None
 
     def attach_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -70,20 +82,54 @@ class LoudNoiseProcessor(AudioProcessor):
         if samples.size == 0:
             return
         rms = float(np.sqrt(np.mean(samples * samples)))
-        if rms < self.rms_threshold:
+        logger.debug(
+            "LoudNoiseProcessor RMS=%.3f bands(low>=%.3f, med>=%.3f, high>=%.3f)",
+            rms,
+            self.rms_low_threshold,
+            self.rms_medium_threshold,
+            self.rms_high_threshold,
+        )
+        if rms < self.rms_low_threshold:
             return
+
+        risk = self._risk_from_rms(rms)
         now = time.monotonic()
         if now - self._last_trigger < self.cooldown_seconds:
             return
         self._last_trigger = now
         if not self._agent:
             return
-        await self._agent.simple_response(
-            "Loud noise event detected from audio. Classify risk and call tools if needed."
-        )
+        if self._inflight_task and not self._inflight_task.done():
+            return
+
+        async def _trigger() -> None:
+            if not self._agent:
+                return
+            logger.info("Loud noise trigger fired (rms=%.3f, risk=%s)", rms, risk)
+            # Emit a guaranteed UI event so Incident Log updates even if the LLM chooses not to call tools.
+            await self._agent.send_custom_event(
+                {
+                    "type": "incident_log",
+                    "message": f"{risk.title()} risk - loud noise detected (rms={rms:.2f})",
+                }
+            )
+            await self._agent.send_custom_event({"type": "risk_status", "risk": risk})
+            await self._agent.simple_response(
+                f"Loud noise event detected with {risk} risk (rms={rms:.2f}). "
+                "Respond briefly and call tools if needed."
+            )
+
+        self._inflight_task = asyncio.create_task(_trigger())
 
     async def close(self) -> None:
         return
+
+    def _risk_from_rms(self, rms: float) -> str:
+        if rms >= self.rms_high_threshold:
+            return "HIGH"
+        if rms >= self.rms_medium_threshold:
+            return "MEDIUM"
+        return "LOW"
 
 
 class YoloSafetyProcessor(VideoProcessor):
@@ -101,6 +147,7 @@ class YoloSafetyProcessor(VideoProcessor):
         phone_class: str = "cell phone",
         require_person_for_helmet: bool = True,
         cooldown_seconds: float = 5.0,
+        classes: Optional[Sequence[str]] = None,
     ):
         from ultralytics import YOLO
 
@@ -114,12 +161,16 @@ class YoloSafetyProcessor(VideoProcessor):
         self.phone_class = phone_class
         self.require_person_for_helmet = require_person_for_helmet
         self.cooldown_seconds = cooldown_seconds
+        self.classes = list(classes or ["person", "helmet", "cell phone"])
 
         self._agent: Optional[Agent] = None
         self._video_forwarder: Optional[VideoForwarder] = None
         self._shutdown = False
         self._last_helmet_trigger = 0.0
         self._last_phone_trigger = 0.0
+        self._last_summary_trigger = 0.0
+        self._warned_missing_helmet_class = False
+        self._last_counts_signature: Optional[tuple[int, int, int]] = None
 
         self._model = YOLO(self.model_path)
         self._model.to(self.device)
@@ -131,6 +182,7 @@ class YoloSafetyProcessor(VideoProcessor):
             self._available_classes = set(str(v) for v in model_names.values())
         else:
             self._available_classes = set(str(v) for v in model_names)
+        self._selected_class_ids = self._resolve_class_ids(model_names, self.classes)
 
         self._supports_person = self.person_class in self._available_classes
         self._supports_helmet = self.helmet_class in self._available_classes
@@ -181,6 +233,7 @@ class YoloSafetyProcessor(VideoProcessor):
             conf=self.conf_threshold,
             device=self.device,
             imgsz=self.imgsz,
+            classes=self._selected_class_ids if self._selected_class_ids else None,
         )
         if not results:
             return []
@@ -191,13 +244,48 @@ class YoloSafetyProcessor(VideoProcessor):
         class_ids = result.boxes.cls.cpu().numpy().astype(int)
         return [names.get(int(cls_id), str(cls_id)) for cls_id in class_ids]
 
+    def _resolve_class_ids(
+        self, names: dict | list, requested_names: Sequence[str]
+    ) -> list[int]:
+        name_to_id: dict[str, int] = {}
+        if isinstance(names, dict):
+            for class_id, class_name in names.items():
+                name_to_id[str(class_name)] = int(class_id)
+        else:
+            for class_id, class_name in enumerate(names):
+                name_to_id[str(class_name)] = int(class_id)
+
+        class_ids: list[int] = []
+        for class_name in requested_names:
+            if class_name in name_to_id:
+                class_ids.append(name_to_id[class_name])
+            else:
+                logger.warning(
+                    "Requested class '%s' not found in model '%s'",
+                    class_name,
+                    self.model_path,
+                )
+        return class_ids
+
     async def _handle_detections(self, classes: Sequence[str]) -> None:
         if not self._agent:
             return
         now = time.monotonic()
-        person_present = self._supports_person and self.person_class in classes
-        helmet_present = self._supports_helmet and self.helmet_class in classes
-        phone_present = self._supports_phone and self.phone_class in classes
+        people_count = sum(1 for c in classes if c == self.person_class)
+        helmet_count = sum(1 for c in classes if c == self.helmet_class)
+        phone_count = sum(1 for c in classes if c == self.phone_class)
+        person_present = self._supports_person and people_count > 0
+        helmet_present = self._supports_helmet and helmet_count > 0
+        phone_present = self._supports_phone and phone_count > 0
+
+        if not self._supports_helmet and not self._warned_missing_helmet_class:
+            self._warned_missing_helmet_class = True
+            logger.warning(
+                "Helmet class '%s' not found in model '%s'. Available classes: %s",
+                self.helmet_class,
+                self.model_path,
+                sorted(self._available_classes),
+            )
 
         if (
             self._supports_helmet
@@ -206,6 +294,14 @@ class YoloSafetyProcessor(VideoProcessor):
         ):
             if now - self._last_helmet_trigger >= self.cooldown_seconds:
                 self._last_helmet_trigger = now
+                await self._agent.send_custom_event(
+                    {
+                        "type": "incident_log",
+                        "risk": "HIGH",
+                        "message": "High risk - helmet missing",
+                    }
+                )
+                await self._agent.send_custom_event({"type": "risk_status", "risk": "HIGH"})
                 await self._agent.simple_response(
                     "Helmet missing detected in video. Respond with the required phrase and call tools."
                 )
@@ -214,6 +310,24 @@ class YoloSafetyProcessor(VideoProcessor):
             self._last_phone_trigger = now
             await self._agent.simple_response(
                 "Unsafe phone usage detected. Classify risk and call tools if needed."
+            )
+
+        # Structured safety summary for LLM reasoning.
+        counts_signature = (people_count, helmet_count, phone_count)
+        if counts_signature != self._last_counts_signature and (
+            now - self._last_summary_trigger >= self.cooldown_seconds
+        ):
+            self._last_counts_signature = counts_signature
+            self._last_summary_trigger = now
+            payload = {
+                "people_detected": people_count,
+                "helmets_detected": helmet_count,
+                "phones_detected": phone_count,
+            }
+            await self._agent.simple_response(
+                "You are a workplace safety AI. If a person is detected without a helmet, "
+                "classify HIGH risk. If a person is using a phone, classify MEDIUM risk. "
+                f"Detection payload: {json.dumps(payload)}"
             )
 
     async def stop_processing(self) -> None:
@@ -235,6 +349,11 @@ async def create_agent(**kwargs) -> Agent:
     yolo_imgsz = int(os.getenv("SENTINEL_YOLO_IMGSZ", "640"))
     yolo_device = os.getenv("SENTINEL_YOLO_DEVICE", "cpu")
     yolo_fps = int(os.getenv("SENTINEL_YOLO_FPS", "2"))
+    yolo_classes = [
+        x.strip()
+        for x in os.getenv("SENTINEL_YOLO_CLASSES", "person,helmet,cell phone").split(",")
+        if x.strip()
+    ]
     person_class = os.getenv("SENTINEL_PERSON_CLASS", "person")
     helmet_class = os.getenv("SENTINEL_HELMET_CLASS", "helmet")
     phone_class = os.getenv("SENTINEL_PHONE_CLASS", "cell phone")
@@ -245,8 +364,11 @@ async def create_agent(**kwargs) -> Agent:
     )
     event_cooldown = float(os.getenv("SENTINEL_EVENT_COOLDOWN_SECONDS", "5"))
 
-    noise_threshold = float(os.getenv("SENTINEL_NOISE_RMS", "0.35"))
-    noise_cooldown = float(os.getenv("SENTINEL_NOISE_COOLDOWN", "3"))
+    noise_low = float(os.getenv("SENTINEL_NOISE_RMS_LOW", "0.18"))
+    noise_medium = float(os.getenv("SENTINEL_NOISE_RMS_MEDIUM", "0.28"))
+    noise_high = float(os.getenv("SENTINEL_NOISE_RMS_HIGH", "0.45"))
+    noise_cooldown = float(os.getenv("SENTINEL_NOISE_COOLDOWN", "8"))
+    audio_only = os.getenv("SENTINEL_AUDIO_ONLY", "1").lower() in ("1", "true", "yes")
 
     # Fallback for placeholder/invalid absolute paths in .env.
     if os.path.isabs(yolo_model_path) and not os.path.exists(yolo_model_path):
@@ -255,11 +377,17 @@ async def create_agent(**kwargs) -> Agent:
         )
         yolo_model_path = "yolo11n.pt"
 
-    agent = Agent(
-        edge=getstream.Edge(),
-        agent_user=User(name="Sentinel AI", id="sentinel"),
-        instructions=SENTINEL_INSTRUCTIONS,
-        processors=[
+    processors = [
+        LoudNoiseProcessor(
+            rms_low_threshold=noise_low,
+            rms_medium_threshold=noise_medium,
+            rms_high_threshold=noise_high,
+            cooldown_seconds=noise_cooldown,
+        ),
+    ]
+    if not audio_only:
+        processors.insert(
+            0,
             YoloSafetyProcessor(
                 model_path=yolo_model_path,
                 conf_threshold=yolo_conf,
@@ -271,16 +399,15 @@ async def create_agent(**kwargs) -> Agent:
                 phone_class=phone_class,
                 require_person_for_helmet=require_person,
                 cooldown_seconds=event_cooldown,
+                classes=yolo_classes,
             ),
-            LoudNoiseProcessor(
-                rms_threshold=noise_threshold,
-                cooldown_seconds=noise_cooldown,
-            ),
-            ultralytics.YOLOPoseProcessor(
-                model_path="yolo26n-pose.pt",
-                fps=2,
-            )
-        ],
+        )
+
+    agent = Agent(
+        edge=getstream.Edge(),
+        agent_user=User(name="Sentinel AI", id="sentinel"),
+        instructions=SENTINEL_INSTRUCTIONS,
+        processors=processors,
         llm=llm,
         stt=deepgram.STT(),
     )

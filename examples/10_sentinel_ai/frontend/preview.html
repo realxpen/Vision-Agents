@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sentinel Frontend Preview (React)</title>
-    <link rel="stylesheet" href="./sentinel_panel.css?v=3" />
+    <link rel="stylesheet" href="./sentinel_panel.css?v=4" />
     <style>
       body {
         margin: 0;
@@ -51,6 +51,20 @@
         font-size: 12px;
         color: #a7c3e8;
       }
+      .video-mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #a7c3e8;
+        border: 1px solid #163253;
+        border-radius: 8px;
+        padding: 6px 8px;
+        background: #0b1a33;
+      }
+      .video-mode-toggle input {
+        margin: 0;
+      }
       .error {
         margin-top: 8px;
         color: #ff8080;
@@ -60,6 +74,6 @@
   </head>
   <body>
     <div id="sentinel-root"></div>
-    <script type="module" src="./preview-react.js?v=3"></script>
+    <script type="module" src="./preview-react.js?v=4"></script>
   </body>
 </html>

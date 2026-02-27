@@ -15,6 +15,29 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
   const streamRef = React.useRef(null);
   const audioCtxRef = React.useRef(null);
   const rafRef = React.useRef(null);
+  const incidentPanelRef = React.useRef(null);
+
+  function detectRiskFromText(text) {
+    const t = String(text || "").toLowerCase();
+    if (t.includes("high risk") || t.includes("high")) return "HIGH";
+    if (t.includes("medium risk") || t.includes("medium")) return "MEDIUM";
+    if (t.includes("low risk") || t.includes("low")) return "LOW";
+    return null;
+  }
+
+  function addIncident(message, riskHint) {
+    const msg = String(message || "").trim();
+    if (!msg) return;
+    const detected = detectRiskFromText(msg);
+    const level = String(riskHint || detected || risk || "MEDIUM").toUpperCase();
+    const incident = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      level: ["HIGH", "MEDIUM", "LOW"].includes(level) ? level : "MEDIUM",
+      message: msg,
+      ts: Date.now(),
+    };
+    setIncidents((prev) => [incident, ...prev].slice(0, 100));
+  }
 
   React.useEffect(() => {
     if (!call || typeof call.on !== "function") return undefined;
@@ -27,11 +50,11 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
       }
 
       if (payload.type === "incident_log" && payload.message) {
-        setIncidents((prev) => [String(payload.message), ...prev].slice(0, 50));
+        addIncident(payload.message, payload.risk);
       }
 
       if (payload.type === "warning" && payload.message) {
-        setIncidents((prev) => [String(payload.message), ...prev].slice(0, 50));
+        addIncident(payload.message, payload.risk);
       }
     });
 
@@ -143,6 +166,42 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!incidentPanelRef.current) return;
+    incidentPanelRef.current.scrollTop = 0;
+  }, [incidents.length]);
+
+  const groupedIncidents = React.useMemo(() => {
+    return {
+      HIGH: incidents.filter((x) => x.level === "HIGH"),
+      MEDIUM: incidents.filter((x) => x.level === "MEDIUM"),
+      LOW: incidents.filter((x) => x.level === "LOW"),
+    };
+  }, [incidents]);
+
+  function renderIncidentGroup(level, items) {
+    if (!items.length) return null;
+    return e("section", { key: level, className: "incident-group" }, [
+      e("div", { key: "head", className: "incident-group-head" }, [
+        e("strong", { key: "label", className: `risk-pill ${level.toLowerCase()}` }, level),
+        e("span", { key: "count", className: "group-count" }, `${items.length}`),
+      ]),
+      e(
+        "ul",
+        { key: "list", className: "incident-group-list" },
+        items.map((item) =>
+          e("li", { key: item.id, className: `incident-item ${item.level.toLowerCase()}` }, [
+            e("span", { key: "dot", className: "dot" }),
+            e("div", { key: "body" }, [
+              e("strong", { key: "title" }, `${item.level} Risk Alert`),
+              e("p", { key: "text" }, item.message),
+            ]),
+          ])
+        )
+      ),
+    ]);
+  }
+
   return e(
     "section",
     { className: "sentinel-ui" },
@@ -153,9 +212,10 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
         "div",
         { className: "brand" },
         e("div", { className: "brand-mark", "aria-hidden": "true" }, "~"),
-        e("div", null, [
-          e("h1", { key: "h" }, "VisionGuard AI"),
+          e("div", null, [
+          e("h1", { key: "h" }, "Sentinel AI"),
           e("p", { key: "p" }, "Real-Time Safety & Risk Detection Agent"),
+          e("span", { key: "sdk", className: "sdk-badge" }, "Vision Agents SDK"),
         ])
       ),
       e("div", { className: "top-actions" }, [
@@ -241,26 +301,18 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
         ]),
         e(
           "div",
-          { key: "panel", className: "incident-panel" },
+          { key: "panel", className: "incident-panel", ref: incidentPanelRef },
           incidents.length === 0
             ? e("div", { className: "incident-empty" }, "No incidents detected yet.")
-            : e(
-                "ul",
-                { id: "sentinel-incidents" },
-                incidents.map((text, idx) =>
-                  e("li", { key: `${idx}-${text}`, className: "incident-item" }, [
-                    e("span", { key: "dot", className: "dot" }),
-                    e("div", { key: "body" }, [
-                      e("strong", { key: "title" }, "Safety Alert"),
-                      e("p", { key: "text" }, text),
-                    ]),
-                  ])
-                )
-              )
+            : e("div", { className: "incident-groups" }, [
+                renderIncidentGroup("HIGH", groupedIncidents.HIGH),
+                renderIncidentGroup("MEDIUM", groupedIncidents.MEDIUM),
+                renderIncidentGroup("LOW", groupedIncidents.LOW),
+              ])
         ),
         e("div", { key: "risk", className: "risk-line" }, [
           "Risk Status: ",
-          e("strong", { "data-risk": risk }, risk),
+          e("strong", { id: "sentinel-risk", "data-risk": risk }, risk),
         ]),
       ])
     )

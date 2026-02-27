@@ -18,6 +18,7 @@ function App() {
   const [error, setError] = React.useState("");
   const [connecting, setConnecting] = React.useState(false);
   const [connectedCall, setConnectedCall] = React.useState(null);
+  const [publishVideo, setPublishVideo] = React.useState(false);
 
   const clientRef = React.useRef(null);
   const callRef = React.useRef(null);
@@ -148,6 +149,16 @@ function App() {
           },
           "Disconnect"
         ),
+        e("label", { key: "videoMode", className: "video-mode-toggle" }, [
+          e("input", {
+            key: "chk",
+            type: "checkbox",
+            checked: publishVideo,
+            onChange: (ev) => setPublishVideo(Boolean(ev.target.checked)),
+            disabled: connecting || !!connectedCall,
+          }),
+          e("span", { key: "txt" }, "Helmet Mode (send camera to agent)"),
+        ]),
         e("span", { key: "status", className: "status" }, `Status: ${status}`),
       ]),
       error ? e("div", { key: "err", className: "error" }, error) : null,
@@ -157,10 +168,20 @@ function App() {
       call: connectedCall,
       onStartMonitoring: async () => {
         if (!connectedCall) return;
-        try {
-          if (connectedCall.camera?.enable) await connectedCall.camera.enable();
-        } catch (e2) {
-          console.warn("Could not enable call camera:", e2);
+        if (publishVideo) {
+          try {
+            if (connectedCall.camera?.enable) await connectedCall.camera.enable();
+          } catch (e2) {
+            console.warn("Could not enable call camera:", e2);
+          }
+        } else {
+          // Keep call media audio-only by default for stability.
+          // The panel still shows local camera preview from getUserMedia.
+          try {
+            if (connectedCall.camera?.disable) await connectedCall.camera.disable();
+          } catch (e2) {
+            console.warn("Could not disable call camera:", e2);
+          }
         }
         try {
           if (connectedCall.microphone?.enable) {
