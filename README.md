@@ -1,8 +1,12 @@
+<<<<<<< HEAD
 # Sentinel AI
 Real-Time Safety and Risk Detection Agent built with Vision Agents SDK.
 
 ## Overview
 Sentinel AI is a multimodal safety agent that monitors live video and audio, detects workplace safety violations, classifies risk severity, and logs incidents in real time.
+=======
+## Sentinel AI (Hackathon Project)
+>>>>>>> 8983685d370362388ae0dec593d5bdd4b1c80031
 
 ### Core Detection Scenarios
 1. Helmet not worn -> `HIGH` risk
@@ -71,6 +75,7 @@ python examples/10_sentinel_ai/sentinel_ai.py run --no-demo --call-id sentinel-l
 python examples/10_sentinel_ai/frontend/dev_server.py
 ```
 
+<<<<<<< HEAD
 ### 4) Open app
 - `http://localhost:5500/preview.html`
 
@@ -108,3 +113,18 @@ In UI:
 ## Security Note
 - `.env` is ignored and should never be committed
 - Rotate API keys if they were ever exposed
+=======
+Enable Helmet Mode (send camera to agent)
+Click Connect to Call
+Click Start Monitoring
+Judge Test Checklist
+No helmet in camera -> incident log shows HIGH + helmet type
+Hold phone visibly -> incident log shows MEDIUM + phone type
+Clap/loud sound -> incident log shows sound type + risk
+Click Generate Summary -> summary entry appears in incident log
+Notes / Limitations
+Internet is required (Stream + Roboflow APIs).
+Accuracy depends on camera angle, lighting, and model quality.
+Frontend/backend must use the same call ID, otherwise incidents will not appear.
+Secrets are not committed; use .env locally and .env.example as template.
+>>>>>>> 8983685d370362388ae0dec593d5bdd4b1c80031
