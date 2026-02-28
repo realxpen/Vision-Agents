@@ -8,6 +8,7 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
   const [live, setLive] = React.useState(false);
   const [mediaReady, setMediaReady] = React.useState(false);
   const [micLevel, setMicLevel] = React.useState(0);
+  const [summaryStatus, setSummaryStatus] = React.useState("");
   const [cameraText, setCameraText] = React.useState(
     "Camera offline. Click Start Monitoring."
   );
@@ -48,6 +49,7 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
         "HELMET_NOT_WORN_DETECTED",
         "PHONE_DETECTED",
         "SOUND_LEVEL_DETECTED",
+        "SESSION_SUMMARY",
         "GENERAL",
       ].includes(type)
         ? type
@@ -180,7 +182,12 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
 
   function generateSummary() {
     if (incidents.length === 0) {
-      addIncident("Low risk - no incidents recorded this session", "LOW", "GENERAL");
+      addIncident(
+        "Low risk - no incidents recorded this session",
+        "LOW",
+        "SESSION_SUMMARY"
+      );
+      setSummaryStatus("Summary generated: no incidents in this session.");
       return;
     }
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
@@ -199,13 +206,15 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
     const summary =
       `Session summary - H:${counts.HIGH} M:${counts.MEDIUM} L:${counts.LOW} ` +
       `| Helmet:${typeCounts.HELMET_NOT_WORN_DETECTED} Phone:${typeCounts.PHONE_DETECTED} Sound:${typeCounts.SOUND_LEVEL_DETECTED}`;
-    addIncident(summary, overallRisk, "GENERAL");
+    addIncident(summary, overallRisk, "SESSION_SUMMARY");
+    setSummaryStatus(summary);
   }
 
   function formatRiskType(type) {
     if (type === "HELMET_NOT_WORN_DETECTED") return "Helmet Not Worn Detected";
     if (type === "PHONE_DETECTED") return "Phone Detected";
     if (type === "SOUND_LEVEL_DETECTED") return "Sound Level Detected";
+    if (type === "SESSION_SUMMARY") return "Session Summary";
     return "General";
   }
 
@@ -315,6 +324,9 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
             },
             "Generate Summary"
           ),
+          summaryStatus
+            ? e("div", { key: "summary", className: "summary-status" }, summaryStatus)
+            : null,
         ]),
       ]),
       e("aside", { className: "incident-col" }, [

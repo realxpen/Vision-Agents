@@ -212,6 +212,15 @@
   padding: 9px 12px;
 }
 
+.summary-status {
+  color: #9ec4ff;
+  font-size: 12px;
+  max-width: 58%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .incident-head {
   display: flex;
   justify-content: space-between;
