@@ -1,5 +1,3 @@
-\
-
 ## Sentinel AI (Hackathon Project)
 
 Sentinel AI is a real-time multimodal safety agent built with the Vision Agents SDK.  
