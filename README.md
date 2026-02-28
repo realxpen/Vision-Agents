@@ -1,14 +1,10 @@
-<<<<<<< HEAD
 # Sentinel AI
-Real-Time Safety and Risk Detection Agent built with Vision Agents SDK.
+Real-Time Multimodal Safety Agent built with Vision Agents SDK.
 
 ## Overview
-Sentinel AI is a multimodal safety agent that monitors live video and audio, detects workplace safety violations, classifies risk severity, and logs incidents in real time.
-=======
-## Sentinel AI (Hackathon Project)
->>>>>>> 8983685d370362388ae0dec593d5bdd4b1c80031
+Sentinel AI monitors live video and audio streams, detects workplace safety violations, classifies risk severity, and logs incidents in real time using LLM reasoning and tool calling.
 
-### Core Detection Scenarios
+## Core Detection Scenarios
 1. Helmet not worn -> `HIGH` risk
 2. Phone detected -> `MEDIUM` risk
 3. Loud sound detected -> `LOW`, `MEDIUM`, or `HIGH` risk
@@ -16,15 +12,14 @@ Sentinel AI is a multimodal safety agent that monitors live video and audio, det
 ## Tech Stack
 | Layer | Technology |
 |---|---|
-| Agent Framework | Vision Agents SDK (`Agent`, `Runner`, processors, tool-calling) |
+| Agent Framework | Vision Agents SDK |
 | Realtime Transport | Stream Video (`getstream.Edge`) |
 | Reasoning | OpenAI Realtime (`gpt-realtime-1.5`) |
-| Vision Detection | Roboflow hosted models (helmet + phone), YOLO support path |
-| Audio Detection | Custom RMS processor (NumPy) |
+| Vision Detection | Roboflow (helmet + phone), YOLO fallback |
+| Audio Detection | NumPy RMS processor |
 | Media Processing | OpenCV, AV |
 | Frontend | React + `@stream-io/video-client` |
-| Config/Token API | Python `http.server` (`dev_server.py`) |
-| Deployment | Railway (agent + config API), Vercel (frontend) |
+| Deployment | Railway (backend), Vercel (frontend) |
 
 ## Architecture
 ```text
@@ -75,7 +70,6 @@ python examples/10_sentinel_ai/sentinel_ai.py run --no-demo --call-id sentinel-l
 python examples/10_sentinel_ai/frontend/dev_server.py
 ```
 
-<<<<<<< HEAD
 ### 4) Open app
 - `http://localhost:5500/preview.html`
 
@@ -84,11 +78,11 @@ In UI:
 2. Click `Connect to Call`
 3. Click `Start Monitoring`
 
-## What To Test
-1. Show no helmet in camera -> `HIGH` helmet incident
-2. Hold phone in hand -> `MEDIUM` phone incident
-3. Make loud sound (clap) -> sound incident with risk level
-4. Click `Generate Summary` -> summary appears in incident log
+## Judge Test Checklist
+1. No helmet in camera -> incident log shows `HIGH` + helmet type
+2. Hold phone visibly -> incident log shows `MEDIUM` + phone type
+3. Clap/loud sound -> incident log shows sound type + risk
+4. Click `Generate Summary` -> summary entry appears in incident log
 
 ## Project Highlights
 - Real-time multimodal safety monitoring (video + audio)
@@ -100,31 +94,29 @@ In UI:
   - multi-frame confirmation
 
 ## Known Limitations
-- Detection quality depends on lighting, angle, and model quality
-- Requires internet (Stream + Roboflow APIs)
+- Internet is required (Stream + Roboflow APIs)
+- Accuracy depends on camera angle, lighting, and model quality
+- Frontend/backend must use the same call ID, otherwise incidents will not appear
 - Realtime session can drop on unstable networks
-- Frontend and backend must use the same call ID
-
-## Important Links
-- Sentinel example code: `examples/10_sentinel_ai/`
-- Example env template: `examples/10_sentinel_ai/.env.example`
-- Frontend preview: `examples/10_sentinel_ai/frontend/preview.html`
 
 ## Security Note
 - `.env` is ignored and should never be committed
-- Rotate API keys if they were ever exposed
-=======
-Enable Helmet Mode (send camera to agent)
-Click Connect to Call
-Click Start Monitoring
-Judge Test Checklist
-No helmet in camera -> incident log shows HIGH + helmet type
-Hold phone visibly -> incident log shows MEDIUM + phone type
-Clap/loud sound -> incident log shows sound type + risk
-Click Generate Summary -> summary entry appears in incident log
-Notes / Limitations
-Internet is required (Stream + Roboflow APIs).
-Accuracy depends on camera angle, lighting, and model quality.
-Frontend/backend must use the same call ID, otherwise incidents will not appear.
-Secrets are not committed; use .env locally and .env.example as template.
->>>>>>> 8983685d370362388ae0dec593d5bdd4b1c80031
+- Use `.env.example` as the template for public setup
+- Rotate API keys immediately if exposed
+
+## How Risk Classification Works
+Sentinel AI combines processor signals from vision and audio before invoking LLM reasoning:
+1. Vision processors detect helmet/phone events.
+2. Audio processor computes RMS loudness bands.
+3. Structured event payload is sent to the LLM.
+4. LLM classifies risk (`LOW`, `MEDIUM`, `HIGH`) and calls tools:
+   - `log_incident`
+   - `speak_warning`
+5. Frontend receives `incident_log` and `risk_status` custom events in real time.
+
+## Demo Preview
+![Sentinel AI Demo](assets/demo_gifs/security_camera.gif)
+
+## Architecture Image (Optional)
+Add a clean PNG/SVG diagram and reference it here:
+![Architecture](assets/sentinel_architecture.png)
