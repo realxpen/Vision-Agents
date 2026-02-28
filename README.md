@@ -116,5 +116,4 @@ Sentinel AI combines processor signals from vision and audio before invoking LLM
 
 
 ## Architecture Image (Optional)
-Add a clean PNG/SVG diagram and reference it here:
 ![Architecture](assets/sentinel_architecture.png)
