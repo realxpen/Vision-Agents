@@ -149,6 +149,44 @@
   padding-bottom: 48px;
 }
 
+.detection-overlay {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detect-pill {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  border: 1px solid #27486f;
+  color: #a9caef;
+  background: rgba(11, 31, 59, 0.9);
+}
+
+.detect-pill.high {
+  border-color: #6a2a44;
+  color: #ffc0d2;
+  background: rgba(53, 22, 34, 0.92);
+}
+
+.detect-pill.medium {
+  border-color: #6f5425;
+  color: #ffd68d;
+  background: rgba(59, 44, 16, 0.92);
+}
+
+.detect-pill.low {
+  border-color: #1f5f44;
+  color: #9ceccf;
+  background: rgba(18, 50, 37, 0.92);
+}
+
 .camera-icon {
   font-size: 34px;
 }
@@ -179,6 +217,20 @@
   width: 0%;
   background: linear-gradient(90deg, #2fd38d 0%, #f5c14a 70%, #ff6f6f 100%);
   transition: width 80ms linear;
+}
+
+.mic-spikes {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 24px;
+}
+
+.spike {
+  width: 6px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #78e6bd 0%, #ffc44f 65%, #ff6f6f 100%);
+  transition: height 70ms linear;
 }
 
 .session-report {

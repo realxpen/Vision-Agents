@@ -9,6 +9,11 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
   const [mediaReady, setMediaReady] = React.useState(false);
   const [micLevel, setMicLevel] = React.useState(0);
   const [summaryStatus, setSummaryStatus] = React.useState("");
+  const [detectionState, setDetectionState] = React.useState({
+    helmet: "Unknown",
+    phone: "Not Detected",
+    sound: "Quiet",
+  });
   const [cameraText, setCameraText] = React.useState(
     "Camera offline. Click Start Monitoring."
   );
@@ -57,6 +62,17 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
       ts: Date.now(),
     };
     setIncidents((prev) => [incident, ...prev].slice(0, 100));
+    setDetectionState((prev) => {
+      const next = { ...prev };
+      if (incident.riskType === "HELMET_NOT_WORN_DETECTED") {
+        next.helmet = msg.toLowerCase().includes("worn") ? "Worn" : "Not Worn";
+      } else if (incident.riskType === "PHONE_DETECTED") {
+        next.phone = "Detected";
+      } else if (incident.riskType === "SOUND_LEVEL_DETECTED") {
+        next.sound = incident.level;
+      }
+      return next;
+    });
   }
 
   React.useEffect(() => {
@@ -229,6 +245,14 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
     incidentPanelRef.current.scrollTop = 0;
   }, [incidents.length]);
 
+  const spikeHeights = React.useMemo(() => {
+    const base = Math.max(8, Math.round(micLevel * 30));
+    return [0.55, 0.75, 1, 0.8, 0.6, 0.9, 0.7].map((m, i) => {
+      const jitter = ((Date.now() / 140 + i * 3) % 5) - 2;
+      return Math.max(6, Math.round(base * m + jitter));
+    });
+  }, [micLevel]);
+
   return e(
     "section",
     { className: "sentinel-ui" },
@@ -297,15 +321,49 @@ export function SentinelPanel({ call, onStartMonitoring, onStopMonitoring }) {
               e("div", { key: "icon", className: "camera-icon" }, "[CAM]"),
               e("p", { key: "txt" }, cameraText),
             ]),
+            e("div", { key: "det", className: "detection-overlay" }, [
+              e(
+                "span",
+                {
+                  key: "h",
+                  className: `detect-pill ${
+                    detectionState.helmet === "Not Worn" ? "high" : "low"
+                  }`,
+                },
+                `Helmet: ${detectionState.helmet}`
+              ),
+              e(
+                "span",
+                {
+                  key: "p",
+                  className: `detect-pill ${
+                    detectionState.phone === "Detected" ? "medium" : "low"
+                  }`,
+                },
+                `Phone: ${detectionState.phone}`
+              ),
+              e(
+                "span",
+                {
+                  key: "s",
+                  className: `detect-pill ${String(detectionState.sound).toLowerCase()}`,
+                },
+                `Sound: ${detectionState.sound}`
+              ),
+            ]),
             e("div", { key: "m", className: "mic-meter" }, [
-              e("span", { key: "l" }, "MIC"),
-              e("div", { key: "track", className: "mic-track" }, [
-                e("div", {
-                  key: "fill",
-                  className: "mic-fill",
-                  style: { width: `${Math.round(micLevel * 100)}%` },
-                }),
-              ]),
+              e("span", { key: "l" }, "SOUND SPIKES"),
+              e(
+                "div",
+                { key: "spikes", className: "mic-spikes" },
+                spikeHeights.map((h, idx) =>
+                  e("span", {
+                    key: `s${idx}`,
+                    className: "spike",
+                    style: { height: `${h}px` },
+                  })
+                )
+              ),
             ]),
           ]
         ),
