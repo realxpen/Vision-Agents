@@ -14,10 +14,29 @@ from dotenv import load_dotenv
 from vision_agents.core import Agent, AgentLauncher, Runner, User
 from vision_agents.core.processors.base_processor import AudioProcessor, VideoProcessor
 from vision_agents.core.utils.video_forwarder import VideoForwarder
-from vision_agents.plugins import deepgram, getstream, openai
+from vision_agents.plugins import getstream, openai
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+def _configure_demo_logging() -> None:
+    # Keep terminal output focused on key safety events during demos.
+    quiet_logs = os.getenv("SENTINEL_QUIET_LOGS", "1").lower() in ("1", "true", "yes")
+    if not quiet_logs:
+        return
+
+    noisy_loggers = (
+        "getstream",
+        "getstream.video",
+        "websockets",
+        "httpx",
+        "httpcore",
+        "aiortc",
+        "pyee",
+    )
+    for name in noisy_loggers:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 SENTINEL_INSTRUCTIONS = """
@@ -352,11 +371,15 @@ class RoboflowSafetyProcessor(VideoProcessor):
         helmet_model_id: str,
         phone_model_id: Optional[str] = None,
         conf_threshold: float = 0.35,
+        helmet_conf_threshold: Optional[float] = None,
+        phone_conf_threshold: Optional[float] = None,
         fps: int = 2,
         person_class: str = "person",
         helmet_class: str = "helmet",
         phone_class: str = "cell phone",
         require_person_for_helmet: bool = True,
+        require_person_for_phone: bool = True,
+        phone_confirm_frames: int = 3,
         cooldown_seconds: float = 5.0,
         timeout_seconds: float = 20.0,
     ):
@@ -364,11 +387,18 @@ class RoboflowSafetyProcessor(VideoProcessor):
         self.helmet_model_id = helmet_model_id
         self.phone_model_id = phone_model_id
         self.conf_threshold = conf_threshold
+        self.helmet_conf_threshold = (
+            helmet_conf_threshold if helmet_conf_threshold is not None else conf_threshold
+        )
+        self.phone_conf_threshold = (
+            phone_conf_threshold if phone_conf_threshold is not None else conf_threshold
+        )
         self.fps = fps
         self.person_class = person_class
         self.helmet_class = helmet_class
         self.phone_class = phone_class
         self.require_person_for_helmet = require_person_for_helmet
+        self.require_person_for_phone = require_person_for_phone
         self.cooldown_seconds = cooldown_seconds
         self.timeout_seconds = timeout_seconds
 
@@ -379,6 +409,10 @@ class RoboflowSafetyProcessor(VideoProcessor):
         self._last_phone_trigger = 0.0
         self._last_summary_trigger = 0.0
         self._last_counts_signature: Optional[tuple[int, int, int]] = None
+        self._helmet_missing_active = False
+        self._phone_streak = 0
+        self._phone_confirm_frames = max(1, phone_confirm_frames)
+        self._last_raw_log_ts = 0.0
         self._executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="roboflow_safety"
         )
@@ -405,6 +439,17 @@ class RoboflowSafetyProcessor(VideoProcessor):
             "mobile_phone",
             "phone",
             "smartphone",
+        }
+        self._no_helmet_aliases = {
+            "no helmet",
+            "no_helmet",
+            "without helmet",
+            "without_helmet",
+            "helmet not worn",
+            "helmet_not_worn",
+            "a helmet not worn",
+            "rejected helmet",
+            "rejected_helmet",
         }
 
     def attach_agent(self, agent: Agent) -> None:
@@ -452,7 +497,9 @@ class RoboflowSafetyProcessor(VideoProcessor):
         image_bytes = encoded.tobytes()
         classes: list[str] = []
         helmet_classes = self._infer_classes_from_model(
-            model_id=self.helmet_model_id, image_bytes=image_bytes
+            model_id=self.helmet_model_id,
+            image_bytes=image_bytes,
+            min_conf=self.helmet_conf_threshold,
         )
         if helmet_classes is None:
             return None
@@ -460,21 +507,23 @@ class RoboflowSafetyProcessor(VideoProcessor):
 
         if self.phone_model_id and self.phone_model_id != self.helmet_model_id:
             phone_classes = self._infer_classes_from_model(
-                model_id=self.phone_model_id, image_bytes=image_bytes
+                model_id=self.phone_model_id,
+                image_bytes=image_bytes,
+                min_conf=self.phone_conf_threshold,
             )
             if phone_classes:
                 classes.extend(phone_classes)
         return classes
 
     def _infer_classes_from_model(
-        self, model_id: str, image_bytes: bytes
+        self, model_id: str, image_bytes: bytes, min_conf: float
     ) -> Optional[list[str]]:
         try:
             response = requests.post(
                 f"https://detect.roboflow.com/{model_id}",
                 params={
                     "api_key": self.api_key,
-                    "confidence": int(self.conf_threshold * 100),
+                    "confidence": int(min_conf * 100),
                 },
                 files={"file": ("frame.jpg", image_bytes, "image/jpeg")},
                 timeout=self.timeout_seconds,
@@ -486,13 +535,31 @@ class RoboflowSafetyProcessor(VideoProcessor):
             return None
 
         predictions = payload.get("predictions", []) if isinstance(payload, dict) else []
+        now = time.monotonic()
+        if now - self._last_raw_log_ts >= 3.0:
+            preview = []
+            for pred in predictions[:5]:
+                if isinstance(pred, dict):
+                    preview.append(
+                        {
+                            "class": pred.get("class"),
+                            "confidence": pred.get("confidence"),
+                        }
+                    )
+            logger.debug(
+                "Roboflow raw model=%s predictions=%d sample=%s",
+                model_id,
+                len(predictions),
+                preview,
+            )
+            self._last_raw_log_ts = now
         classes: list[str] = []
         for pred in predictions:
             if not isinstance(pred, dict):
                 continue
             cls = pred.get("class")
             conf = float(pred.get("confidence", 0.0))
-            if cls and conf >= self.conf_threshold:
+            if cls and conf >= min_conf:
                 classes.append(self._normalize_class_name(str(cls)))
         return classes
 
@@ -504,6 +571,17 @@ class RoboflowSafetyProcessor(VideoProcessor):
             return self.helmet_class
         if normalized in self._phone_aliases:
             return self.phone_class
+        if normalized in self._no_helmet_aliases:
+            return "__NO_HELMET__"
+        # Fallback substring matching for custom label variants.
+        if "phone" in normalized:
+            return self.phone_class
+        if "helmet" in normalized or "hardhat" in normalized or "hard hat" in normalized:
+            if "not" in normalized or "without" in normalized or "no " in normalized:
+                return "__NO_HELMET__"
+            return self.helmet_class
+        if "person" in normalized or "worker" in normalized or "human" in normalized:
+            return self.person_class
         return raw
 
     async def _handle_detections(self, classes: Sequence[str]) -> None:
@@ -513,12 +591,14 @@ class RoboflowSafetyProcessor(VideoProcessor):
         people_count = sum(1 for c in classes if c == self.person_class)
         helmet_count = sum(1 for c in classes if c == self.helmet_class)
         phone_count = sum(1 for c in classes if c == self.phone_class)
+        no_helmet_count = sum(1 for c in classes if c == "__NO_HELMET__")
         person_present = people_count > 0
         helmet_present = helmet_count > 0
         phone_present = phone_count > 0
+        no_helmet_present = no_helmet_count > 0
         counts_signature = (people_count, helmet_count, phone_count)
         if counts_signature != self._last_counts_signature:
-            logger.info(
+            logger.debug(
                 "Roboflow detections: people=%d helmets=%d phones=%d classes=%s",
                 people_count,
                 helmet_count,
@@ -526,13 +606,14 @@ class RoboflowSafetyProcessor(VideoProcessor):
                 list(classes),
             )
 
-        if (
+        helmet_missing = no_helmet_present or (
             (not self.require_person_for_helmet or person_present)
             and not helmet_present
-            and people_count > 0
-            and now - self._last_helmet_trigger >= self.cooldown_seconds
-        ):
+            and (person_present or phone_present)
+        )
+        if helmet_missing and now - self._last_helmet_trigger >= self.cooldown_seconds:
             self._last_helmet_trigger = now
+            self._helmet_missing_active = True
             await self._agent.send_custom_event(
                 {
                     "type": "incident_log",
@@ -544,10 +625,29 @@ class RoboflowSafetyProcessor(VideoProcessor):
             await self._agent.simple_response(
                 "Helmet missing detected in video. Respond with the required phrase and call tools."
             )
+        elif self._helmet_missing_active and helmet_present:
+            self._helmet_missing_active = False
+            await self._agent.send_custom_event(
+                {
+                    "type": "incident_log",
+                    "risk": "LOW",
+                    "message": "Low risk - helmet worn",
+                }
+            )
+            await self._agent.send_custom_event({"type": "risk_status", "risk": "LOW"})
+
+        phone_gate = phone_present and (
+            person_present or not self.require_person_for_phone
+        )
+        if phone_gate:
+            self._phone_streak += 1
+        else:
+            self._phone_streak = 0
 
         if (
-            phone_present
-            and people_count > 0
+            phone_gate
+            and
+            self._phone_streak >= self._phone_confirm_frames
             and now - self._last_phone_trigger >= self.cooldown_seconds
         ):
             self._last_phone_trigger = now
@@ -600,6 +700,8 @@ async def create_agent(**kwargs) -> Agent:
     yolo_imgsz = int(os.getenv("SENTINEL_YOLO_IMGSZ", "640"))
     yolo_device = os.getenv("SENTINEL_YOLO_DEVICE", "cpu")
     yolo_fps = int(os.getenv("SENTINEL_YOLO_FPS", "2"))
+    helmet_conf = float(os.getenv("SENTINEL_HELMET_CONF", str(yolo_conf)))
+    phone_conf = float(os.getenv("SENTINEL_PHONE_CONF", "0.60"))
     yolo_classes = [
         x.strip()
         for x in os.getenv("SENTINEL_YOLO_CLASSES", "person,helmet,cell phone").split(",")
@@ -613,6 +715,10 @@ async def create_agent(**kwargs) -> Agent:
         "true",
         "yes",
     )
+    require_person_for_phone = os.getenv(
+        "SENTINEL_REQUIRE_PERSON_FOR_PHONE", "1"
+    ).lower() in ("1", "true", "yes")
+    phone_confirm_frames = max(1, int(os.getenv("SENTINEL_PHONE_CONFIRM_FRAMES", "3")))
     event_cooldown = float(os.getenv("SENTINEL_EVENT_COOLDOWN_SECONDS", "5"))
 
     noise_low = float(os.getenv("SENTINEL_NOISE_RMS_LOW", "0.18"))
@@ -661,11 +767,15 @@ async def create_agent(**kwargs) -> Agent:
                     helmet_model_id=roboflow_helmet_model_id,
                     phone_model_id=roboflow_phone_model_id or None,
                     conf_threshold=yolo_conf,
+                    helmet_conf_threshold=helmet_conf,
+                    phone_conf_threshold=phone_conf,
                     fps=yolo_fps,
                     person_class=person_class,
                     helmet_class=helmet_class,
                     phone_class=phone_class,
                     require_person_for_helmet=require_person,
+                    require_person_for_phone=require_person_for_phone,
+                    phone_confirm_frames=phone_confirm_frames,
                     cooldown_seconds=event_cooldown,
                 ),
             )
@@ -693,7 +803,6 @@ async def create_agent(**kwargs) -> Agent:
         instructions=SENTINEL_INSTRUCTIONS,
         processors=processors,
         llm=llm,
-        stt=deepgram.STT(),
     )
 
     @llm.register_function(
@@ -741,13 +850,33 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
     # before create_call so created_by_id is populated server-side.
     if hasattr(agent.edge, "create_user"):
         await agent.edge.create_user(agent.agent_user)
-    call = await agent.create_call(call_type, call_id)
+    max_retries = int(os.getenv("SENTINEL_JOIN_RETRIES", "3"))
+    retry_delay = float(os.getenv("SENTINEL_JOIN_RETRY_DELAY_SECONDS", "2"))
+    last_exc: Exception | None = None
 
-    async with agent.join(call):
-        await agent.finish()
+    for attempt in range(1, max_retries + 1):
+        try:
+            call = await agent.create_call(call_type, call_id)
+            async with agent.join(call, participant_wait_timeout=0):
+                await agent.finish()
+            return
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Join attempt %d/%d failed: %s",
+                attempt,
+                max_retries,
+                exc,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+
+    if last_exc:
+        raise last_exc
 
 
 if __name__ == "__main__":
+    _configure_demo_logging()
     # Set AGENT_IDLE_TIMEOUT_SECONDS=0 (or negative) in .env to effectively disable idle timeout.
     idle_timeout_seconds = float(os.getenv("AGENT_IDLE_TIMEOUT_SECONDS", "0"))
     if idle_timeout_seconds <= 0:

@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -10,9 +11,6 @@ from getstream import Stream
 
 FRONTEND_DIR = Path(__file__).resolve().parent
 REPO_ROOT = FRONTEND_DIR.parents[2]
-DEFAULT_USER_ID = os.getenv("SENTINEL_FRONTEND_USER_ID", "user-demo-agent")
-DEFAULT_CALL_TYPE = os.getenv("SENTINEL_FRONTEND_CALL_TYPE", "default")
-DEFAULT_CALL_ID = os.getenv("SENTINEL_FRONTEND_CALL_ID", "sentinel-live")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -28,9 +26,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _handle_frontend_config(self, query: str) -> None:
         params = parse_qs(query)
-        user_id = params.get("user_id", [DEFAULT_USER_ID])[0]
-        call_type = params.get("call_type", [DEFAULT_CALL_TYPE])[0]
-        call_id = params.get("call_id", [DEFAULT_CALL_ID])[0]
+        default_user_id = os.getenv("SENTINEL_FRONTEND_USER_ID", "user-demo-agent")
+        default_call_type = os.getenv("SENTINEL_FRONTEND_CALL_TYPE", "default")
+        default_call_id = os.getenv("SENTINEL_FRONTEND_CALL_ID", "sentinel-live")
+        user_id = params.get("user_id", [default_user_id])[0]
+        if user_id == "user-demo-agent":
+            user_id = f"user-demo-agent-{int(time.time())}"
+        call_type = params.get("call_type", [default_call_type])[0]
+        call_id = params.get("call_id", [default_call_id])[0]
 
         api_key = os.getenv("STREAM_API_KEY")
         api_secret = os.getenv("STREAM_API_SECRET")

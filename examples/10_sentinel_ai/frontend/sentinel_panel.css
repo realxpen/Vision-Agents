@@ -118,7 +118,7 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   opacity: 0;
   transition: opacity 180ms ease;
   background: #000;
@@ -251,25 +251,6 @@
   padding-top: 180px;
 }
 
-.incident-groups {
-  display: grid;
-  gap: 10px;
-}
-
-.incident-group {
-  border: 1px solid #1a3556;
-  border-radius: 10px;
-  background: #0b1f3c;
-  padding: 8px;
-}
-
-.incident-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
 .risk-pill {
   border-radius: 999px;
   padding: 2px 8px;
@@ -296,11 +277,6 @@
   border-color: #1f5f44;
 }
 
-.group-count {
-  font-size: 11px;
-  color: #94b2d7;
-}
-
 .incident-group-list {
   list-style: none;
   margin: 0;
@@ -310,9 +286,9 @@
 }
 
 .incident-item {
-  display: grid;
-  grid-template-columns: 10px 1fr;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: 1px solid #1a3556;
   border-radius: 10px;
   background: #0d2342;
@@ -339,14 +315,20 @@
   background: #78e6bd;
 }
 
-.incident-item strong {
-  font-size: 12px;
+.incident-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.incident-item p {
-  margin: 2px 0 0;
-  color: #a7c3e8;
-  font-size: 12px;
+.type-pill {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: #9ec2ed;
+  border: 1px solid #25496e;
+  background: #0b1f3b;
 }
 
 .risk-line {
