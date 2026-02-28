@@ -114,8 +114,6 @@ Sentinel AI combines processor signals from vision and audio before invoking LLM
    - `speak_warning`
 5. Frontend receives `incident_log` and `risk_status` custom events in real time.
 
-## Demo Preview
-![Sentinel AI Demo](assets/demo_gifs/security_camera.gif)
 
 ## Architecture Image (Optional)
 Add a clean PNG/SVG diagram and reference it here:
