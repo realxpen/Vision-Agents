@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Sequence
 
 import av
+import cv2
 import numpy as np
+import requests
 from dotenv import load_dotenv
 from vision_agents.core import Agent, AgentLauncher, Runner, User
 from vision_agents.core.processors.base_processor import AudioProcessor, VideoProcessor
@@ -341,6 +343,199 @@ class YoloSafetyProcessor(VideoProcessor):
         self._executor.shutdown(wait=False)
 
 
+class RoboflowSafetyProcessor(VideoProcessor):
+    name = "roboflow_safety"
+
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str,
+        conf_threshold: float = 0.35,
+        fps: int = 2,
+        person_class: str = "person",
+        helmet_class: str = "helmet",
+        phone_class: str = "cell phone",
+        require_person_for_helmet: bool = True,
+        cooldown_seconds: float = 5.0,
+        timeout_seconds: float = 20.0,
+    ):
+        self.api_key = api_key
+        self.model_id = model_id
+        self.conf_threshold = conf_threshold
+        self.fps = fps
+        self.person_class = person_class
+        self.helmet_class = helmet_class
+        self.phone_class = phone_class
+        self.require_person_for_helmet = require_person_for_helmet
+        self.cooldown_seconds = cooldown_seconds
+        self.timeout_seconds = timeout_seconds
+
+        self._agent: Optional[Agent] = None
+        self._video_forwarder: Optional[VideoForwarder] = None
+        self._shutdown = False
+        self._last_helmet_trigger = 0.0
+        self._last_phone_trigger = 0.0
+        self._last_summary_trigger = 0.0
+        self._last_counts_signature: Optional[tuple[int, int, int]] = None
+        self._executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="roboflow_safety"
+        )
+
+    def attach_agent(self, agent: Agent) -> None:
+        self._agent = agent
+
+    async def process_video(
+        self,
+        track,
+        participant_id: Optional[str],
+        shared_forwarder: Optional[VideoForwarder] = None,
+    ) -> None:
+        if self._video_forwarder is not None:
+            await self._video_forwarder.remove_frame_handler(self._on_frame)
+
+        self._video_forwarder = (
+            shared_forwarder
+            if shared_forwarder
+            else VideoForwarder(
+                track,
+                max_buffer=max(1, self.fps),
+                fps=self.fps,
+                name="roboflow_safety_forwarder",
+            )
+        )
+        self._video_forwarder.add_frame_handler(
+            self._on_frame, fps=float(self.fps), name="roboflow_safety"
+        )
+
+    async def _on_frame(self, frame: av.VideoFrame) -> None:
+        if self._shutdown:
+            return
+        frame_array = frame.to_ndarray(format="bgr24")
+        event_loop = asyncio.get_event_loop()
+        classes = await event_loop.run_in_executor(
+            self._executor, self._infer_classes, frame_array
+        )
+        if classes is None:
+            return
+        await self._handle_detections(classes)
+
+    def _infer_classes(self, frame_array: np.ndarray) -> Optional[list[str]]:
+        ok, encoded = cv2.imencode(".jpg", frame_array)
+        if not ok:
+            return None
+        try:
+            response = requests.post(
+                f"https://detect.roboflow.com/{self.model_id}",
+                params={
+                    "api_key": self.api_key,
+                    "confidence": int(self.conf_threshold * 100),
+                },
+                files={"file": ("frame.jpg", encoded.tobytes(), "image/jpeg")},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning("Roboflow inference failed: %s", exc)
+            return None
+
+        predictions = payload.get("predictions", []) if isinstance(payload, dict) else []
+        classes: list[str] = []
+        for pred in predictions:
+            if not isinstance(pred, dict):
+                continue
+            cls = pred.get("class")
+            conf = float(pred.get("confidence", 0.0))
+            if cls and conf >= self.conf_threshold:
+                classes.append(str(cls))
+        return classes
+
+    async def _handle_detections(self, classes: Sequence[str]) -> None:
+        if not self._agent:
+            return
+        now = time.monotonic()
+        people_count = sum(1 for c in classes if c == self.person_class)
+        helmet_count = sum(1 for c in classes if c == self.helmet_class)
+        phone_count = sum(1 for c in classes if c == self.phone_class)
+        person_present = people_count > 0
+        helmet_present = helmet_count > 0
+        phone_present = phone_count > 0
+        counts_signature = (people_count, helmet_count, phone_count)
+        if counts_signature != self._last_counts_signature:
+            logger.info(
+                "Roboflow detections: people=%d helmets=%d phones=%d classes=%s",
+                people_count,
+                helmet_count,
+                phone_count,
+                list(classes),
+            )
+
+        if (
+            (not self.require_person_for_helmet or person_present)
+            and not helmet_present
+            and people_count > 0
+            and now - self._last_helmet_trigger >= self.cooldown_seconds
+        ):
+            self._last_helmet_trigger = now
+            await self._agent.send_custom_event(
+                {
+                    "type": "incident_log",
+                    "risk": "HIGH",
+                    "message": "High risk - helmet missing",
+                }
+            )
+            await self._agent.send_custom_event({"type": "risk_status", "risk": "HIGH"})
+            await self._agent.simple_response(
+                "Helmet missing detected in video. Respond with the required phrase and call tools."
+            )
+
+        if (
+            phone_present
+            and people_count > 0
+            and now - self._last_phone_trigger >= self.cooldown_seconds
+        ):
+            self._last_phone_trigger = now
+            await self._agent.send_custom_event(
+                {
+                    "type": "incident_log",
+                    "risk": "MEDIUM",
+                    "message": "Medium risk - phone usage detected",
+                }
+            )
+            await self._agent.send_custom_event(
+                {"type": "risk_status", "risk": "MEDIUM"}
+            )
+            await self._agent.simple_response(
+                "Unsafe phone usage detected. Classify risk and call tools if needed."
+            )
+
+        if counts_signature != self._last_counts_signature and (
+            now - self._last_summary_trigger >= self.cooldown_seconds
+        ):
+            self._last_counts_signature = counts_signature
+            self._last_summary_trigger = now
+            payload = {
+                "people_detected": people_count,
+                "helmets_detected": helmet_count,
+                "phones_detected": phone_count,
+            }
+            await self._agent.simple_response(
+                "You are a workplace safety AI. If a person is detected without a helmet, "
+                "classify HIGH risk. If a person is using a phone, classify MEDIUM risk. "
+                f"Detection payload: {json.dumps(payload)}"
+            )
+
+    async def stop_processing(self) -> None:
+        if self._video_forwarder is not None:
+            await self._video_forwarder.remove_frame_handler(self._on_frame)
+            self._video_forwarder = None
+
+    async def close(self) -> None:
+        self._shutdown = True
+        await self.stop_processing()
+        self._executor.shutdown(wait=False)
+
+
 async def create_agent(**kwargs) -> Agent:
     llm = openai.Realtime(fps=2)
 
@@ -369,6 +564,13 @@ async def create_agent(**kwargs) -> Agent:
     noise_high = float(os.getenv("SENTINEL_NOISE_RMS_HIGH", "0.45"))
     noise_cooldown = float(os.getenv("SENTINEL_NOISE_COOLDOWN", "8"))
     audio_only = os.getenv("SENTINEL_AUDIO_ONLY", "1").lower() in ("1", "true", "yes")
+    roboflow_api_key = os.getenv("ROBOFLOW_API_KEY", "").strip()
+    roboflow_model_id = os.getenv("ROBOFLOW_MODEL_ID", "").strip()
+    use_roboflow = os.getenv("SENTINEL_USE_ROBOFLOW", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) and bool(roboflow_api_key and roboflow_model_id)
 
     # Fallback for placeholder/invalid absolute paths in .env.
     if os.path.isabs(yolo_model_path) and not os.path.exists(yolo_model_path):
@@ -386,22 +588,39 @@ async def create_agent(**kwargs) -> Agent:
         ),
     ]
     if not audio_only:
-        processors.insert(
-            0,
-            YoloSafetyProcessor(
-                model_path=yolo_model_path,
-                conf_threshold=yolo_conf,
-                imgsz=yolo_imgsz,
-                device=yolo_device,
-                fps=yolo_fps,
-                person_class=person_class,
-                helmet_class=helmet_class,
-                phone_class=phone_class,
-                require_person_for_helmet=require_person,
-                cooldown_seconds=event_cooldown,
-                classes=yolo_classes,
-            ),
-        )
+        if use_roboflow:
+            logger.info("Using Roboflow hosted model for safety detection: %s", roboflow_model_id)
+            processors.insert(
+                0,
+                RoboflowSafetyProcessor(
+                    api_key=roboflow_api_key,
+                    model_id=roboflow_model_id,
+                    conf_threshold=yolo_conf,
+                    fps=yolo_fps,
+                    person_class=person_class,
+                    helmet_class=helmet_class,
+                    phone_class=phone_class,
+                    require_person_for_helmet=require_person,
+                    cooldown_seconds=event_cooldown,
+                ),
+            )
+        else:
+            processors.insert(
+                0,
+                YoloSafetyProcessor(
+                    model_path=yolo_model_path,
+                    conf_threshold=yolo_conf,
+                    imgsz=yolo_imgsz,
+                    device=yolo_device,
+                    fps=yolo_fps,
+                    person_class=person_class,
+                    helmet_class=helmet_class,
+                    phone_class=phone_class,
+                    require_person_for_helmet=require_person,
+                    cooldown_seconds=event_cooldown,
+                    classes=yolo_classes,
+                ),
+            )
 
     agent = Agent(
         edge=getstream.Edge(),
