@@ -349,7 +349,8 @@ class RoboflowSafetyProcessor(VideoProcessor):
     def __init__(
         self,
         api_key: str,
-        model_id: str,
+        helmet_model_id: str,
+        phone_model_id: Optional[str] = None,
         conf_threshold: float = 0.35,
         fps: int = 2,
         person_class: str = "person",
@@ -360,7 +361,8 @@ class RoboflowSafetyProcessor(VideoProcessor):
         timeout_seconds: float = 20.0,
     ):
         self.api_key = api_key
-        self.model_id = model_id
+        self.helmet_model_id = helmet_model_id
+        self.phone_model_id = phone_model_id
         self.conf_threshold = conf_threshold
         self.fps = fps
         self.person_class = person_class
@@ -380,6 +382,30 @@ class RoboflowSafetyProcessor(VideoProcessor):
         self._executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="roboflow_safety"
         )
+        self._person_aliases = {
+            "person",
+            "worker",
+            "human",
+            "people",
+        }
+        self._helmet_aliases = {
+            "helmet",
+            "hardhat",
+            "hard_hat",
+            "helmet_worn",
+            "helmet worn",
+            "safety_helmet",
+            "head-helmet",
+            "head_helmet",
+        }
+        self._phone_aliases = {
+            "cell phone",
+            "cellphone",
+            "mobile phone",
+            "mobile_phone",
+            "phone",
+            "smartphone",
+        }
 
     def attach_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -423,20 +449,40 @@ class RoboflowSafetyProcessor(VideoProcessor):
         ok, encoded = cv2.imencode(".jpg", frame_array)
         if not ok:
             return None
+        image_bytes = encoded.tobytes()
+        classes: list[str] = []
+        helmet_classes = self._infer_classes_from_model(
+            model_id=self.helmet_model_id, image_bytes=image_bytes
+        )
+        if helmet_classes is None:
+            return None
+        classes.extend(helmet_classes)
+
+        if self.phone_model_id and self.phone_model_id != self.helmet_model_id:
+            phone_classes = self._infer_classes_from_model(
+                model_id=self.phone_model_id, image_bytes=image_bytes
+            )
+            if phone_classes:
+                classes.extend(phone_classes)
+        return classes
+
+    def _infer_classes_from_model(
+        self, model_id: str, image_bytes: bytes
+    ) -> Optional[list[str]]:
         try:
             response = requests.post(
-                f"https://detect.roboflow.com/{self.model_id}",
+                f"https://detect.roboflow.com/{model_id}",
                 params={
                     "api_key": self.api_key,
                     "confidence": int(self.conf_threshold * 100),
                 },
-                files={"file": ("frame.jpg", encoded.tobytes(), "image/jpeg")},
+                files={"file": ("frame.jpg", image_bytes, "image/jpeg")},
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
             payload = response.json()
         except Exception as exc:
-            logger.warning("Roboflow inference failed: %s", exc)
+            logger.warning("Roboflow inference failed for model '%s': %s", model_id, exc)
             return None
 
         predictions = payload.get("predictions", []) if isinstance(payload, dict) else []
@@ -447,8 +493,18 @@ class RoboflowSafetyProcessor(VideoProcessor):
             cls = pred.get("class")
             conf = float(pred.get("confidence", 0.0))
             if cls and conf >= self.conf_threshold:
-                classes.append(str(cls))
+                classes.append(self._normalize_class_name(str(cls)))
         return classes
+
+    def _normalize_class_name(self, raw: str) -> str:
+        normalized = raw.strip().lower().replace("-", " ").replace("_", " ")
+        if normalized in self._person_aliases:
+            return self.person_class
+        if normalized in self._helmet_aliases:
+            return self.helmet_class
+        if normalized in self._phone_aliases:
+            return self.phone_class
+        return raw
 
     async def _handle_detections(self, classes: Sequence[str]) -> None:
         if not self._agent:
@@ -566,11 +622,15 @@ async def create_agent(**kwargs) -> Agent:
     audio_only = os.getenv("SENTINEL_AUDIO_ONLY", "1").lower() in ("1", "true", "yes")
     roboflow_api_key = os.getenv("ROBOFLOW_API_KEY", "").strip()
     roboflow_model_id = os.getenv("ROBOFLOW_MODEL_ID", "").strip()
+    roboflow_helmet_model_id = os.getenv("ROBOFLOW_HELMET_MODEL_ID", "").strip()
+    roboflow_phone_model_id = os.getenv("ROBOFLOW_PHONE_MODEL_ID", "").strip()
+    if not roboflow_helmet_model_id:
+        roboflow_helmet_model_id = roboflow_model_id
     use_roboflow = os.getenv("SENTINEL_USE_ROBOFLOW", "1").lower() in (
         "1",
         "true",
         "yes",
-    ) and bool(roboflow_api_key and roboflow_model_id)
+    ) and bool(roboflow_api_key and roboflow_helmet_model_id)
 
     # Fallback for placeholder/invalid absolute paths in .env.
     if os.path.isabs(yolo_model_path) and not os.path.exists(yolo_model_path):
@@ -589,12 +649,17 @@ async def create_agent(**kwargs) -> Agent:
     ]
     if not audio_only:
         if use_roboflow:
-            logger.info("Using Roboflow hosted model for safety detection: %s", roboflow_model_id)
+            logger.info(
+                "Using Roboflow hosted model(s): helmet=%s phone=%s",
+                roboflow_helmet_model_id,
+                roboflow_phone_model_id or roboflow_helmet_model_id,
+            )
             processors.insert(
                 0,
                 RoboflowSafetyProcessor(
                     api_key=roboflow_api_key,
-                    model_id=roboflow_model_id,
+                    helmet_model_id=roboflow_helmet_model_id,
+                    phone_model_id=roboflow_phone_model_id or None,
                     conf_threshold=yolo_conf,
                     fps=yolo_fps,
                     person_class=person_class,
